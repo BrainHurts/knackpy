@@ -381,32 +381,35 @@ class KnackpyBackupUI:
         self.status_message.set(f"Backup completed successfully! Backup saved to: {backup_folder}")
     
     def update_job_list(self):
+        # Preserve current selection
+        selected_ids = set(self.jobs_tree.item(item)['values'][-1] for item in self.jobs_tree.selection())
         # Clear existing items
         for item in self.jobs_tree.get_children():
             self.jobs_tree.delete(item)
-        
         # Add current jobs
+        item_id_map = {}
         for job in self.scheduler.get_jobs():
             next_run = job.next_run_time.strftime('%Y-%m-%d %H:%M') if job.next_run_time else 'N/A'
             last_run = self.job_last_runs.get(job.id, 'N/A')
             if isinstance(last_run, datetime):
                 last_run = last_run.strftime('%Y-%m-%d %H:%M')
-            
             job_objects = self.job_selected_objects.get(job.id, [])
             selected_names = [self._get_container_name(container_id) for container_id in job_objects]
             objects_str = ', '.join(selected_names)
             if len(objects_str) > 50:
                 objects_str = objects_str[:47] + '...'
-            
-            self.jobs_tree.insert('', 'end', values=(
+            item = self.jobs_tree.insert('', 'end', values=(
                 objects_str,
                 'Active',
                 last_run,
                 next_run,
                 job.id
             ))
-        
-        # Schedule next update
+            item_id_map[job.id] = item
+        # Restore selection
+        for job_id in selected_ids:
+            if job_id in item_id_map:
+                self.jobs_tree.selection_add(item_id_map[job_id])
         self.root.after(1000, self.update_job_list)
     
     def remove_selected_job(self):
@@ -414,18 +417,14 @@ class KnackpyBackupUI:
         if not selected:
             self.status_message.set("Please select a job to remove")
             return
-        
         for item in selected:
-            # Get the job ID from the tree item's values
             values = self.jobs_tree.item(item)['values']
-            job_id = values[5] if len(values) > 5 else None
-            if job_id and job_id in self.scheduler.get_jobs():
+            job_id = values[-1] if len(values) > 0 else None
+            if job_id and job_id in [job.id for job in self.scheduler.get_jobs()]:
                 self.scheduler.remove_job(job_id)
-                # Clean up stored data
                 self.job_last_runs.pop(job_id, None)
                 self.job_selected_objects.pop(job_id, None)
                 self.job_metadata.pop(job_id, None)
-        
         self.update_job_list()
         self.save_schedules()
     

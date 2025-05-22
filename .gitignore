@@ -147,3 +147,5 @@ cython_debug/
 notes.md
 pytest.ini
 _csv/
+schedules.json
+schedules.json.bak
