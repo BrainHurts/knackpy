@@ -10,4 +10,5 @@ dependencies = [
     "pandas>=2.2.3",
     "pytz>=2025.2",
     "requests>=2.32.3",
+    "kivy>=2.2.1",
 ]
