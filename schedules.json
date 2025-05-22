@@ -1,24 +1,11 @@
 {
   "jobs": [
     {
-      "id": "backup_20250522_162010",
+      "id": "backup_20250522_163259",
       "hour": 16,
-      "minute": 21,
+      "minute": 33,
       "objects": [
-        "object_2",
-        "object_3"
-      ]
-    },
-    {
-      "id": "backup_20250522_162333",
-      "hour": 16,
-      "minute": 24,
-      "objects": [
-        "object_2",
-        "object_5",
-        "object_3",
-        "object_1",
-        "object_6"
+        "object_5"
       ]
     }
   ],

@@ -32,7 +32,8 @@ class KnackpyBackupGUI:
         
         # Initialize Dear PyGui
         dpg.create_context()
-        dpg.create_viewport(title="Knackpy Backup Tool", width=800, height=1000)
+        dpg.create_viewport(title="Knackpy Backup Tool", width=800, height=600)
+        dpg.set_viewport_clear_color((30, 30, 30, 255))
         dpg.setup_dearpygui()
         
         # Create the UI first
@@ -63,7 +64,7 @@ class KnackpyBackupGUI:
             # Backup Section
             with dpg.collapsing_header(label="Backup", default_open=True):
                 dpg.add_text("Select Objects to Backup:")
-                dpg.add_child_window(tag="container_window", width=700, height=300)
+                dpg.add_child_window(tag="container_window", width=700, height=120)
                 dpg.add_text("Backup Directory:")
                 dpg.add_input_text(tag="backup_dir", default_value=self.backup_dir, width=600)
                 dpg.add_button(label="Browse", callback=self.select_backup_dir)
@@ -77,10 +78,10 @@ class KnackpyBackupGUI:
                 dpg.add_progress_bar(tag="progress_bar", default_value=0, width=700)
             
             # Schedule Section
-            with dpg.collapsing_header(label="Scheduled Jobs", default_open=True):
+            with dpg.collapsing_header(label="Scheduled Jobs", default_open=False):
                 dpg.add_text("Current Jobs:")
                 # Create a table using a child window with a grid layout
-                with dpg.child_window(tag="jobs_table", width=700, height=300):
+                with dpg.child_window(tag="jobs_table", width=700, height=120):
                     # Header row
                     with dpg.group(horizontal=True):
                         with dpg.group(width=200):
@@ -175,9 +176,12 @@ class KnackpyBackupGUI:
     
     def show_message(self, message):
         """Show a message dialog using Dear PyGui"""
-        with dpg.window(label="Message", modal=True, autosize=True):
+        window_tag = "message_window"
+        if dpg.does_item_exist(window_tag):
+            dpg.delete_item(window_tag)
+        with dpg.window(label="Message", modal=True, autosize=True, tag=window_tag):
             dpg.add_text(message)
-            dpg.add_button(label="OK", callback=lambda: dpg.delete_item(dpg.last_item_parent()))
+            dpg.add_button(label="OK", callback=lambda: dpg.delete_item(window_tag))
     
     def backup_selected(self):
         if not self.app:
