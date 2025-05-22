@@ -58,8 +58,7 @@ class KnackpyBackupUI:
                     data = json.load(f)
                 except json.JSONDecodeError as e:
                     logging.error(f"Corrupt schedules.json: {e}")
-                    messagebox.showerror("Schedule Error", "Your schedules.json file is corrupt and will be reset.")
-                    # Backup the corrupt file
+                    self.status_message.set("Your schedules.json file is corrupt and will be reset.")
                     shutil.move('schedules.json', 'schedules.json.bak')
                     return
                 
@@ -71,6 +70,7 @@ class KnackpyBackupUI:
                 self.scheduler.remove_all_jobs()
                 self.job_last_runs.clear()
                 self.job_selected_objects.clear()
+                self.job_metadata.clear()
                 
                 # Restore jobs
                 for job_data in data['jobs']:
@@ -96,7 +96,7 @@ class KnackpyBackupUI:
                                 self._perform_backup_with_objects(self.job_selected_objects[job_id])
                             except Exception as e:
                                 logging.error(f"Error in scheduled backup {job_id}: {str(e)}")
-                                messagebox.showerror("Backup Error", f"Scheduled backup failed: {str(e)}")
+                                self.status_message.set(f"Scheduled backup failed: {str(e)}")
                         
                         # Add the job to the scheduler
                         self.scheduler.add_job(
@@ -208,14 +208,12 @@ class KnackpyBackupUI:
         # --- Schedule frame ---
         schedule_frame = ttk.LabelFrame(main_frame, text="Scheduled Jobs", padding="10")
         schedule_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-        columns = ('Time', 'Objects', 'Status', 'Last Run', 'Next Run')
+        columns = ('Objects', 'Status', 'Last Run', 'Next Run')
         self.jobs_tree = ttk.Treeview(schedule_frame, columns=columns, show='headings')
-        self.jobs_tree.heading('Time', text='Time')
         self.jobs_tree.heading('Objects', text='Objects')
         self.jobs_tree.heading('Status', text='Status')
         self.jobs_tree.heading('Last Run', text='Last Run')
         self.jobs_tree.heading('Next Run', text='Next Run')
-        self.jobs_tree.column('Time', width=80)
         self.jobs_tree.column('Objects', width=200)
         self.jobs_tree.column('Status', width=80)
         self.jobs_tree.column('Last Run', width=150)
@@ -234,11 +232,10 @@ class KnackpyBackupUI:
     
     def show_add_schedule_dialog(self):
         if not self.app:
-            messagebox.showerror("Error", "Please connect to a Knack application first")
+            self.status_message.set("Please connect to a Knack application first")
             return
-            
         if not self.selected_containers:
-            messagebox.showerror("Error", "Please select at least one object to backup")
+            self.status_message.set("Please select at least one object to backup")
             return
             
         # Create dialog window
@@ -280,8 +277,6 @@ class KnackpyBackupUI:
             try:
                 hour = int(hour_var.get())
                 minute = int(minute_var.get())
-                logging.info(f"[DEBUG] Adding job with hour={hour}, minute={minute}")
-                
                 if not (0 <= hour <= 23 and 0 <= minute <= 59):
                     raise ValueError("Invalid time values")
                 
@@ -307,7 +302,7 @@ class KnackpyBackupUI:
                         self._perform_backup_with_objects(self.job_selected_objects[job_id])
                     except Exception as e:
                         logging.error(f"Error in scheduled backup {job_id}: {str(e)}")
-                        messagebox.showerror("Backup Error", f"Scheduled backup failed: {str(e)}")
+                        self.status_message.set(f"Scheduled backup failed: {str(e)}")
                 
                 # Add the job to the scheduler
                 self.scheduler.add_job(
@@ -327,16 +322,17 @@ class KnackpyBackupUI:
                 dialog.destroy()
                 
                 # Show success message
-                messagebox.showinfo("Success", f"Schedule added successfully for {hour:02d}:{minute:02d}")
+                self.status_message.set(f"Schedule added successfully for {hour:02d}:{minute:02d}")
                 
             except ValueError as e:
-                messagebox.showerror("Error", str(e), parent=dialog)
+                self.status_message.set(str(e))
         
         ttk.Button(dialog, text="Add Schedule", command=add_schedule).pack(pady=10)
     
     def _perform_backup_with_objects(self, objects_to_backup):
         """Perform backup with a specific set of objects"""
         if not self.app:
+            self.status_message.set("Not connected to Knack app.")
             return
         
         # Create backup directory if it doesn't exist
@@ -377,14 +373,12 @@ class KnackpyBackupUI:
                     self._save_to_json(formatted_records, container_id, container_name, backup_folder)
                 
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to backup {container_id}: {str(e)}")
+                self.status_message.set(f"Failed to backup {container_id}: {str(e)}")
         
         # Complete progress
         self.progress_bar["value"] = total_containers
         self.progress_label.config(text="Backup completed!")
-        
-        # Show success message
-        messagebox.showinfo("Success", f"Backup completed successfully!\nBackup saved to: {backup_folder}")
+        self.status_message.set(f"Backup completed successfully! Backup saved to: {backup_folder}")
     
     def update_job_list(self):
         # Clear existing items
@@ -398,40 +392,18 @@ class KnackpyBackupUI:
             if isinstance(last_run, datetime):
                 last_run = last_run.strftime('%Y-%m-%d %H:%M')
             
-            # Get stored objects for this job
             job_objects = self.job_selected_objects.get(job.id, [])
             selected_names = [self._get_container_name(container_id) for container_id in job_objects]
             objects_str = ', '.join(selected_names)
-            if len(objects_str) > 50:  # Truncate if too long
+            if len(objects_str) > 50:
                 objects_str = objects_str[:47] + '...'
             
-            # Get time from trigger
-            trigger = job.trigger
-            hour = getattr(trigger, 'hour', '*')
-            minute = getattr(trigger, 'minute', '*')
-            
-            # Convert to integers if possible
-            try:
-                if isinstance(hour, set) and len(hour) == 1:
-                    hour = next(iter(hour))
-                if isinstance(minute, set) and len(minute) == 1:
-                    minute = next(iter(minute))
-                
-                # Format time string
-                if isinstance(hour, int) and isinstance(minute, int):
-                    time_str = f"{hour:02d}:{minute:02d}"
-                else:
-                    time_str = f"{hour}:{minute}"
-            except (ValueError, TypeError):
-                time_str = f"{hour}:{minute}"
-            
             self.jobs_tree.insert('', 'end', values=(
-                time_str,
                 objects_str,
                 'Active',
                 last_run,
                 next_run,
-                job.id  # Store job ID in the last column
+                job.id
             ))
         
         # Schedule next update
@@ -440,7 +412,7 @@ class KnackpyBackupUI:
     def remove_selected_job(self):
         selected = self.jobs_tree.selection()
         if not selected:
-            messagebox.showwarning("Warning", "Please select a job to remove")
+            self.status_message.set("Please select a job to remove")
             return
         
         for item in selected:
@@ -504,7 +476,6 @@ class KnackpyBackupUI:
             
         except Exception as e:
             self.status_message.set(f"Error: {str(e)}")
-            messagebox.showerror("Error", f"Failed to connect: {str(e)}")
     
     def update_selected_containers(self):
         self.selected_containers = [

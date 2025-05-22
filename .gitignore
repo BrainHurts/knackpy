@@ -25,6 +25,8 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+*.json
+*.json.bak
 
 # Knack backups
 knack_backup/
