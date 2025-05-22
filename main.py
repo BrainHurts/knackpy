@@ -10,6 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 import threading
 import logging
 import shutil
+import keyring
 
 class KnackpyBackupUI:
     def __init__(self, root):
@@ -36,6 +37,7 @@ class KnackpyBackupUI:
         self.job_selected_objects = {}
         
         # Load saved schedules
+        self.load_credentials_from_keyring()  # Load credentials if available
         self.load_schedules()
         
         # Handle window close
@@ -178,6 +180,8 @@ class KnackpyBackupUI:
         ttk.Label(connection_frame, text="API Key:").grid(row=1, column=0, sticky=tk.W, pady=5)
         ttk.Entry(connection_frame, textvariable=self.api_key, width=40, show="*").grid(row=1, column=1, sticky=tk.W, pady=5)
         ttk.Button(connection_frame, text="Connect", command=self.connect_to_app).grid(row=2, column=0, columnspan=2, pady=10)
+        ttk.Button(connection_frame, text="Save Credentials", command=self.save_credentials_to_keyring).grid(row=3, column=0, columnspan=2, pady=5)
+        ttk.Button(connection_frame, text="Load Credentials", command=self.load_credentials_from_keyring).grid(row=4, column=0, columnspan=2, pady=5)
 
         # --- Backup frame ---
         backup_frame = ttk.LabelFrame(main_frame, text="Backup", padding="10")
@@ -634,6 +638,19 @@ class KnackpyBackupUI:
         for char in ['<', '>', ':', '"', '/', '\\', '|', '?', '*']:
             filename = filename.replace(char, '_')
         return filename
+
+    def save_credentials_to_keyring(self):
+        keyring.set_password("knackpy_backup", "app_id", self.app_id.get())
+        keyring.set_password("knackpy_backup", "api_key", self.api_key.get())
+        messagebox.showinfo("Credentials Saved", "App ID and API Key saved to system keyring.")
+
+    def load_credentials_from_keyring(self):
+        app_id = keyring.get_password("knackpy_backup", "app_id")
+        api_key = keyring.get_password("knackpy_backup", "api_key")
+        if app_id:
+            self.app_id.set(app_id)
+        if api_key:
+            self.api_key.set(api_key)
 
 def main():
     root = tk.Tk()
