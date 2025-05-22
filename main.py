@@ -37,7 +37,8 @@ class KnackpyBackupUI:
         self.job_selected_objects = {}
         
         # Load saved schedules
-        self.load_credentials_from_keyring()  # Load credentials if available
+        self.status_message = tk.StringVar(value="Not connected")
+        self.load_credentials_from_keyring(auto_connect=True)  # Load and try to connect
         self.load_schedules()
         
         # Handle window close
@@ -167,22 +168,19 @@ class KnackpyBackupUI:
             self.root.destroy()
     
     def create_widgets(self):
-        # Main frame
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
-
-        # --- Connection frame ---
         connection_frame = ttk.LabelFrame(main_frame, text="Connection", padding="10")
         connection_frame.pack(fill=tk.X, pady=10)
-
         ttk.Label(connection_frame, text="App ID:").grid(row=0, column=0, sticky=tk.W, pady=5)
         ttk.Entry(connection_frame, textvariable=self.app_id, width=40).grid(row=0, column=1, sticky=tk.W, pady=5)
         ttk.Label(connection_frame, text="API Key:").grid(row=1, column=0, sticky=tk.W, pady=5)
         ttk.Entry(connection_frame, textvariable=self.api_key, width=40, show="*").grid(row=1, column=1, sticky=tk.W, pady=5)
         ttk.Button(connection_frame, text="Connect", command=self.connect_to_app).grid(row=2, column=0, columnspan=2, pady=10)
         ttk.Button(connection_frame, text="Save Credentials", command=self.save_credentials_to_keyring).grid(row=3, column=0, columnspan=2, pady=5)
-        ttk.Button(connection_frame, text="Load Credentials", command=self.load_credentials_from_keyring).grid(row=4, column=0, columnspan=2, pady=5)
-
+        self.status_label = ttk.Label(main_frame, textvariable=self.status_message)
+        self.status_label.pack(anchor=tk.W, pady=5)
+        
         # --- Backup frame ---
         backup_frame = ttk.LabelFrame(main_frame, text="Backup", padding="10")
         backup_frame.pack(fill=tk.BOTH, expand=True, pady=10)
@@ -206,10 +204,6 @@ class KnackpyBackupUI:
         self.progress_label.pack(anchor=tk.W, pady=5)
         self.progress_bar = ttk.Progressbar(self.progress_frame, orient=tk.HORIZONTAL, mode="determinate", length=400)
         self.progress_bar.pack(fill=tk.X, pady=5)
-        self.status_label = ttk.Label(main_frame, text="Not connected")
-        self.status_label.pack(anchor=tk.W, pady=5)
-        backup_frame.columnconfigure(1, weight=1)
-        backup_frame.rowconfigure(1, weight=1)
 
         # --- Schedule frame ---
         schedule_frame = ttk.LabelFrame(main_frame, text="Scheduled Jobs", padding="10")
@@ -466,7 +460,7 @@ class KnackpyBackupUI:
     def connect_to_app(self):
         try:
             self.app = knackpy.App(app_id=self.app_id.get(), api_key=self.api_key.get())
-            self.status_label.config(text=f"Connected to Knack application")
+            self.status_message.set(f"Connected to Knack application")
             
             # Clear existing container checkboxes
             for widget in self.container_frame.winfo_children():
@@ -505,10 +499,11 @@ class KnackpyBackupUI:
                     command=self.update_selected_containers
                 ).grid(row=row, column=col, sticky=tk.W, padx=10, pady=2)
             
-            messagebox.showinfo("Success", f"Connected to Knack application successfully!\nFound {num_objects} objects.")
+            message = f"Connected to Knack application successfully!\nFound {num_objects} objects."
+            self.status_message.set(message)
             
         except Exception as e:
-            self.status_label.config(text=f"Error: {str(e)}")
+            self.status_message.set(f"Error: {str(e)}")
             messagebox.showerror("Error", f"Failed to connect: {str(e)}")
     
     def update_selected_containers(self):
@@ -583,9 +578,6 @@ class KnackpyBackupUI:
         # Complete progress
         self.progress_bar["value"] = total_containers
         self.progress_label.config(text="Backup completed!")
-        
-        # Show success message
-        messagebox.showinfo("Success", f"Backup completed successfully!\nBackup saved to: {backup_folder}")
     
     def _get_container_name(self, container_id):
         if not self.app or not hasattr(self.app, 'containers'):
@@ -642,15 +634,22 @@ class KnackpyBackupUI:
     def save_credentials_to_keyring(self):
         keyring.set_password("knackpy_backup", "app_id", self.app_id.get())
         keyring.set_password("knackpy_backup", "api_key", self.api_key.get())
-        messagebox.showinfo("Credentials Saved", "App ID and API Key saved to system keyring.")
+        self.status_message.set("App ID and API Key saved to system keyring.")
 
-    def load_credentials_from_keyring(self):
+    def load_credentials_from_keyring(self, auto_connect=False):
         app_id = keyring.get_password("knackpy_backup", "app_id")
         api_key = keyring.get_password("knackpy_backup", "api_key")
         if app_id:
             self.app_id.set(app_id)
         if api_key:
             self.api_key.set(api_key)
+        if app_id and api_key and auto_connect:
+            self.status_message.set("Loaded credentials from keyring. Connecting...")
+            self.root.after(100, self.connect_to_app)
+        elif app_id or api_key:
+            self.status_message.set("Loaded credentials from keyring.")
+        else:
+            self.status_message.set("No credentials found in keyring.")
 
 def main():
     root = tk.Tk()
