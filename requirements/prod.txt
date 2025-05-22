@@ -1,4 +1,0 @@
-pytz
-requests
-APScheduler>=3.10.1
-pandas>=2.0.0 
