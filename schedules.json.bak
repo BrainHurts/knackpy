@@ -1,4 +1,14 @@
 {
-  "jobs": [],
+  "jobs": [
+    {
+      "id": "backup_20250522_162010",
+      "hour": 16,
+      "minute": 21,
+      "objects": [
+        "object_2",
+        "object_3"
+      ]
+    }
+  ],
   "last_runs": {}
 }

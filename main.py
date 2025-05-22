@@ -7,7 +7,6 @@ import csv
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-import threading
 import logging
 import shutil
 import keyring
