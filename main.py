@@ -9,12 +9,14 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import threading
 import logging
+import shutil
 
 class KnackpyBackupUI:
     def __init__(self, root):
+        self.job_metadata = {}  # job_id -> {'hour': int, 'minute': int, 'objects': list}
         self.root = root
         self.root.title("Knackpy Backup Tool")
-        self.root.geometry("800x800")
+        self.root.geometry("800x1000")
         
         self.app_id = tk.StringVar()
         self.api_key = tk.StringVar()
@@ -44,21 +46,46 @@ class KnackpyBackupUI:
     def load_schedules(self):
         """Load saved schedules from JSON file"""
         try:
-            if os.path.exists('schedules.json'):
-                with open('schedules.json', 'r') as f:
+            if not os.path.exists('schedules.json'):
+                logging.info("No schedules file found")
+                return
+                
+            with open('schedules.json', 'r') as f:
+                try:
                     data = json.load(f)
-                    
-                    # Restore jobs
-                    for job_data in data['jobs']:
+                except json.JSONDecodeError as e:
+                    logging.error(f"Corrupt schedules.json: {e}")
+                    messagebox.showerror("Schedule Error", "Your schedules.json file is corrupt and will be reset.")
+                    # Backup the corrupt file
+                    shutil.move('schedules.json', 'schedules.json.bak')
+                    return
+                
+                if not data.get('jobs'):
+                    logging.info("No jobs found in schedules file")
+                    return
+                
+                # Clear existing jobs
+                self.scheduler.remove_all_jobs()
+                self.job_last_runs.clear()
+                self.job_selected_objects.clear()
+                
+                # Restore jobs
+                for job_data in data['jobs']:
+                    try:
                         job_id = job_data['id']
                         hour = job_data['hour']
                         minute = job_data['minute']
                         objects = job_data['objects']
                         
-                        # Store the objects
+                        # Store the selected objects for this job
                         self.job_selected_objects[job_id] = objects
+                        self.job_metadata[job_id] = {
+                            'hour': hour,
+                            'minute': minute,
+                            'objects': objects
+                        }
                         
-                        # Create the scheduled job
+                        # Create the backup function
                         def create_scheduled_backup(job_id=job_id):
                             try:
                                 self.job_last_runs[job_id] = datetime.now()
@@ -68,51 +95,57 @@ class KnackpyBackupUI:
                                 logging.error(f"Error in scheduled backup {job_id}: {str(e)}")
                                 messagebox.showerror("Backup Error", f"Scheduled backup failed: {str(e)}")
                         
+                        # Add the job to the scheduler
                         self.scheduler.add_job(
                             create_scheduled_backup,
                             trigger=CronTrigger(hour=hour, minute=minute),
                             id=job_id,
                             name=f"Daily Backup at {hour:02d}:{minute:02d}"
                         )
+                        
+                        # Restore last run time if it exists
+                        if job_id in data.get('last_runs', {}):
+                            try:
+                                self.job_last_runs[job_id] = datetime.fromisoformat(data['last_runs'][job_id])
+                            except (ValueError, TypeError) as e:
+                                logging.error(f"Error parsing last run time for job {job_id}: {e}")
                     
-                    # Restore last run times
-                    self.job_last_runs = {
-                        job_id: datetime.fromisoformat(time_str)
-                        for job_id, time_str in data['last_runs'].items()
-                    }
-                    
-                logging.info("Successfully loaded saved schedules")
+                    except Exception as e:
+                        logging.error(f"Error loading job {job_data.get('id', 'unknown')}: {e}")
+                        continue
+                
+                logging.info(f"Successfully loaded {len(data['jobs'])} schedules")
+                
         except Exception as e:
             logging.error(f"Error loading schedules: {str(e)}")
     
     def save_schedules(self):
-        """Save current schedules to JSON file"""
+        """Save current schedules to JSON file atomically and with backup."""
         try:
             data = {
                 'jobs': [],
                 'last_runs': {}
             }
-            
-            # Save jobs
-            for job in self.scheduler.get_jobs():
+            for job_id, meta in self.job_metadata.items():
                 job_data = {
-                    'id': job.id,
-                    'hour': job.trigger.fields[1],  # hour
-                    'minute': job.trigger.fields[0],  # minute
-                    'objects': self.job_selected_objects.get(job.id, [])
+                    'id': job_id,
+                    'hour': meta['hour'],
+                    'minute': meta['minute'],
+                    'objects': meta['objects']
                 }
                 data['jobs'].append(job_data)
-            
-            # Save last run times
             data['last_runs'] = {
                 job_id: time.isoformat()
                 for job_id, time in self.job_last_runs.items()
+                if job_id in self.job_metadata
             }
-            
-            with open('schedules.json', 'w') as f:
+            tmpfile = 'schedules.json.tmp'
+            with open(tmpfile, 'w') as f:
                 json.dump(data, f, indent=2)
-            
-            logging.info("Successfully saved schedules")
+            if os.path.exists('schedules.json'):
+                shutil.copy2('schedules.json', 'schedules.json.bak')
+            os.replace(tmpfile, 'schedules.json')
+            logging.info(f"Successfully saved {len(data['jobs'])} schedules")
         except Exception as e:
             logging.error(f"Error saving schedules: {str(e)}")
     
@@ -132,134 +165,73 @@ class KnackpyBackupUI:
             self.root.destroy()
     
     def create_widgets(self):
-        # Create notebook for tabs
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-        
-        # Backup tab
-        backup_tab = ttk.Frame(self.notebook)
-        self.notebook.add(backup_tab, text="Backup")
-        
-        # Schedule tab
-        schedule_tab = ttk.Frame(self.notebook)
-        self.notebook.add(schedule_tab, text="Schedule")
-        
-        # Create backup tab widgets
-        self.create_backup_widgets(backup_tab)
-        
-        # Create schedule tab widgets
-        self.create_schedule_widgets(schedule_tab)
-    
-    def create_backup_widgets(self, parent):
         # Main frame
-        main_frame = ttk.Frame(parent, padding="10")
+        main_frame = ttk.Frame(self.root, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Connection frame
+
+        # --- Connection frame ---
         connection_frame = ttk.LabelFrame(main_frame, text="Connection", padding="10")
         connection_frame.pack(fill=tk.X, pady=10)
-        
-        # App ID
+
         ttk.Label(connection_frame, text="App ID:").grid(row=0, column=0, sticky=tk.W, pady=5)
         ttk.Entry(connection_frame, textvariable=self.app_id, width=40).grid(row=0, column=1, sticky=tk.W, pady=5)
-        
-        # API Key
         ttk.Label(connection_frame, text="API Key:").grid(row=1, column=0, sticky=tk.W, pady=5)
         ttk.Entry(connection_frame, textvariable=self.api_key, width=40, show="*").grid(row=1, column=1, sticky=tk.W, pady=5)
-        
-        # Connect button
         ttk.Button(connection_frame, text="Connect", command=self.connect_to_app).grid(row=2, column=0, columnspan=2, pady=10)
-        
-        # Backup frame
+
+        # --- Backup frame ---
         backup_frame = ttk.LabelFrame(main_frame, text="Backup", padding="10")
         backup_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-        
-        # Container selection
+
         ttk.Label(backup_frame, text="Select Objects to Backup:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        
-        # Container list with checkboxes
         self.container_frame = ttk.Frame(backup_frame)
         self.container_frame.grid(row=1, column=0, columnspan=2, sticky=tk.NSEW, pady=5)
-        
-        # Backup directory
         ttk.Label(backup_frame, text="Backup Directory:").grid(row=2, column=0, sticky=tk.W, pady=5)
         dir_frame = ttk.Frame(backup_frame)
         dir_frame.grid(row=2, column=1, sticky=tk.W, pady=5)
         ttk.Entry(dir_frame, textvariable=self.backup_dir, width=40).pack(side=tk.LEFT)
         ttk.Button(dir_frame, text="...", command=self.select_backup_dir, width=3).pack(side=tk.LEFT, padx=5)
-        
-        # Buttons
         button_frame = ttk.Frame(backup_frame)
         button_frame.grid(row=3, column=0, columnspan=2, pady=10)
-        
         ttk.Button(button_frame, text="Select All", command=self.select_all_containers).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Deselect All", command=self.deselect_all_containers).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Backup Selected", command=self.backup_selected).pack(side=tk.LEFT, padx=5)
-        
-        # Progress bar
         self.progress_frame = ttk.Frame(backup_frame)
         self.progress_frame.grid(row=4, column=0, columnspan=2, sticky=tk.EW, pady=5)
-        
         self.progress_label = ttk.Label(self.progress_frame, text="")
         self.progress_label.pack(anchor=tk.W, pady=5)
-        
         self.progress_bar = ttk.Progressbar(self.progress_frame, orient=tk.HORIZONTAL, mode="determinate", length=400)
         self.progress_bar.pack(fill=tk.X, pady=5)
-        
-        # Status
         self.status_label = ttk.Label(main_frame, text="Not connected")
         self.status_label.pack(anchor=tk.W, pady=5)
-        
-        # Configure grid weights
         backup_frame.columnconfigure(1, weight=1)
         backup_frame.rowconfigure(1, weight=1)
-    
-    def create_schedule_widgets(self, parent):
-        # Main frame
-        main_frame = ttk.Frame(parent, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Schedule list frame
-        list_frame = ttk.LabelFrame(main_frame, text="Scheduled Jobs", padding="10")
-        list_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-        
-        # Create Treeview for jobs
+
+        # --- Schedule frame ---
+        schedule_frame = ttk.LabelFrame(main_frame, text="Scheduled Jobs", padding="10")
+        schedule_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         columns = ('Time', 'Objects', 'Status', 'Last Run', 'Next Run')
-        self.jobs_tree = ttk.Treeview(list_frame, columns=columns, show='headings')
-        
-        # Set column headings and widths
+        self.jobs_tree = ttk.Treeview(schedule_frame, columns=columns, show='headings')
         self.jobs_tree.heading('Time', text='Time')
         self.jobs_tree.heading('Objects', text='Objects')
         self.jobs_tree.heading('Status', text='Status')
         self.jobs_tree.heading('Last Run', text='Last Run')
         self.jobs_tree.heading('Next Run', text='Next Run')
-        
         self.jobs_tree.column('Time', width=80)
         self.jobs_tree.column('Objects', width=200)
         self.jobs_tree.column('Status', width=80)
         self.jobs_tree.column('Last Run', width=150)
         self.jobs_tree.column('Next Run', width=150)
-        
-        # Add scrollbar
-        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.jobs_tree.yview)
+        scrollbar = ttk.Scrollbar(schedule_frame, orient=tk.VERTICAL, command=self.jobs_tree.yview)
         self.jobs_tree.configure(yscrollcommand=scrollbar.set)
-        
-        # Pack tree and scrollbar
         self.jobs_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Add/Remove buttons
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Button(button_frame, text="Add Schedule", command=self.show_add_schedule_dialog).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Remove Selected", command=self.remove_selected_job).pack(side=tk.LEFT, padx=5)
-        
-        # Schedule status
+        schedule_button_frame = ttk.Frame(main_frame)
+        schedule_button_frame.pack(fill=tk.X, pady=10)
+        ttk.Button(schedule_button_frame, text="Add Schedule", command=self.show_add_schedule_dialog).pack(side=tk.LEFT, padx=5)
+        ttk.Button(schedule_button_frame, text="Remove Selected", command=self.remove_selected_job).pack(side=tk.LEFT, padx=5)
         self.schedule_status = ttk.Label(main_frame, text="Scheduler is running")
         self.schedule_status.pack(anchor=tk.W, pady=5)
-        
-        # Update job list periodically
         self.update_job_list()
     
     def show_add_schedule_dialog(self):
@@ -282,12 +254,14 @@ class KnackpyBackupUI:
         time_frame = ttk.Frame(dialog, padding="10")
         time_frame.pack(fill=tk.X, pady=5)
         
+        now = datetime.now()
+        hour_var = tk.StringVar(value=str(now.hour))
+        minute_var = tk.StringVar(value=str(now.minute))
+        
         ttk.Label(time_frame, text="Hour (0-23):").pack(side=tk.LEFT)
-        hour_var = tk.StringVar(value="10")
         ttk.Entry(time_frame, textvariable=hour_var, width=5).pack(side=tk.LEFT, padx=5)
         
         ttk.Label(time_frame, text="Minute (0-59):").pack(side=tk.LEFT)
-        minute_var = tk.StringVar(value="19")
         ttk.Entry(time_frame, textvariable=minute_var, width=5).pack(side=tk.LEFT, padx=5)
         
         # Show selected objects
@@ -308,6 +282,7 @@ class KnackpyBackupUI:
             try:
                 hour = int(hour_var.get())
                 minute = int(minute_var.get())
+                logging.info(f"[DEBUG] Adding job with hour={hour}, minute={minute}")
                 
                 if not (0 <= hour <= 23 and 0 <= minute <= 59):
                     raise ValueError("Invalid time values")
@@ -317,6 +292,11 @@ class KnackpyBackupUI:
                 
                 # Store the selected objects for this job
                 self.job_selected_objects[job_id] = self.selected_containers.copy()
+                self.job_metadata[job_id] = {
+                    'hour': hour,
+                    'minute': minute,
+                    'objects': self.selected_containers.copy()
+                }
                 
                 # Create a backup function that captures the current state
                 def scheduled_backup():
@@ -331,6 +311,7 @@ class KnackpyBackupUI:
                         logging.error(f"Error in scheduled backup {job_id}: {str(e)}")
                         messagebox.showerror("Backup Error", f"Scheduled backup failed: {str(e)}")
                 
+                # Add the job to the scheduler
                 self.scheduler.add_job(
                     scheduled_backup,
                     trigger=CronTrigger(hour=hour, minute=minute),
@@ -338,8 +319,17 @@ class KnackpyBackupUI:
                     name=f"Daily Backup at {hour:02d}:{minute:02d}"
                 )
                 
+                # Update the UI
                 self.update_job_list()
+                
+                # Save schedules immediately
+                self.save_schedules()
+                
+                # Close the dialog
                 dialog.destroy()
+                
+                # Show success message
+                messagebox.showinfo("Success", f"Schedule added successfully for {hour:02d}:{minute:02d}")
                 
             except ValueError as e:
                 messagebox.showerror("Error", str(e), parent=dialog)
@@ -417,12 +407,33 @@ class KnackpyBackupUI:
             if len(objects_str) > 50:  # Truncate if too long
                 objects_str = objects_str[:47] + '...'
             
+            # Get time from trigger
+            trigger = job.trigger
+            hour = getattr(trigger, 'hour', '*')
+            minute = getattr(trigger, 'minute', '*')
+            
+            # Convert to integers if possible
+            try:
+                if isinstance(hour, set) and len(hour) == 1:
+                    hour = next(iter(hour))
+                if isinstance(minute, set) and len(minute) == 1:
+                    minute = next(iter(minute))
+                
+                # Format time string
+                if isinstance(hour, int) and isinstance(minute, int):
+                    time_str = f"{hour:02d}:{minute:02d}"
+                else:
+                    time_str = f"{hour}:{minute}"
+            except (ValueError, TypeError):
+                time_str = f"{hour}:{minute}"
+            
             self.jobs_tree.insert('', 'end', values=(
-                f"{job.trigger.fields[1]}:{job.trigger.fields[0]}",  # hour:minute
+                time_str,
                 objects_str,
                 'Active',
                 last_run,
-                next_run
+                next_run,
+                job.id  # Store job ID in the last column
             ))
         
         # Schedule next update
@@ -435,13 +446,18 @@ class KnackpyBackupUI:
             return
         
         for item in selected:
-            job_id = self.jobs_tree.item(item)['values'][0]
-            self.scheduler.remove_job(job_id)
-            # Clean up stored data
-            self.job_last_runs.pop(job_id, None)
-            self.job_selected_objects.pop(job_id, None)
+            # Get the job ID from the tree item's values
+            values = self.jobs_tree.item(item)['values']
+            job_id = values[5] if len(values) > 5 else None
+            if job_id and job_id in self.scheduler.get_jobs():
+                self.scheduler.remove_job(job_id)
+                # Clean up stored data
+                self.job_last_runs.pop(job_id, None)
+                self.job_selected_objects.pop(job_id, None)
+                self.job_metadata.pop(job_id, None)
         
         self.update_job_list()
+        self.save_schedules()
     
     def connect_to_app(self):
         try:
@@ -568,6 +584,8 @@ class KnackpyBackupUI:
         messagebox.showinfo("Success", f"Backup completed successfully!\nBackup saved to: {backup_folder}")
     
     def _get_container_name(self, container_id):
+        if not self.app or not hasattr(self.app, 'containers'):
+            return container_id
         for container in self.app.containers:
             if container.obj == container_id:
                 return container.name

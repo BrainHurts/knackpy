@@ -1,0 +1,21 @@
+{
+  "jobs": [
+    {
+      "id": "backup_20250522_122558",
+      "hour": 12,
+      "minute": 30,
+      "objects": [
+        "object_5"
+      ]
+    },
+    {
+      "id": "backup_20250522_122631",
+      "hour": 12,
+      "minute": 45,
+      "objects": [
+        "object_6"
+      ]
+    }
+  ],
+  "last_runs": {}
+}
