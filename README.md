@@ -90,9 +90,9 @@ $env:KNACK_BACKUP_DIR="C:\path\to\backup\directory"
    crontab -e
    ```
 
-2. Add a line to run the backup daily at 2 AM:
+2. Add a line to run the backup daily at 10:19 AM:
    ```bash
-   0 2 * * * cd /path/to/knackpy-backup && /usr/bin/python3 scheduled_backup.py
+   21 10 * * * cd /Users/ckinsfather/Desktop/Backup && /usr/bin/python3 scheduled_backup.py
    ```
 
 #### On Windows (using Task Scheduler):

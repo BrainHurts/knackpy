@@ -5,12 +5,16 @@ import json
 import os
 import csv
 from datetime import datetime
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+import threading
+import logging
 
 class KnackpyBackupUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Knackpy Backup Tool")
-        self.root.geometry("800x600")
+        self.root.geometry("800x800")
         
         self.app_id = tk.StringVar()
         self.api_key = tk.StringVar()
@@ -21,11 +25,134 @@ class KnackpyBackupUI:
         self.selected_containers = []
         self.backup_dir = tk.StringVar(value=os.path.join(os.getcwd(), "knack_backup"))
         
+        # Scheduler
+        self.scheduler = BackgroundScheduler()
+        self.scheduler.start()
+        
+        # Track job last run times and selected objects
+        self.job_last_runs = {}
+        self.job_selected_objects = {}
+        
+        # Load saved schedules
+        self.load_schedules()
+        
+        # Handle window close
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
         self.create_widgets()
     
+    def load_schedules(self):
+        """Load saved schedules from JSON file"""
+        try:
+            if os.path.exists('schedules.json'):
+                with open('schedules.json', 'r') as f:
+                    data = json.load(f)
+                    
+                    # Restore jobs
+                    for job_data in data['jobs']:
+                        job_id = job_data['id']
+                        hour = job_data['hour']
+                        minute = job_data['minute']
+                        objects = job_data['objects']
+                        
+                        # Store the objects
+                        self.job_selected_objects[job_id] = objects
+                        
+                        # Create the scheduled job
+                        def create_scheduled_backup(job_id=job_id):
+                            try:
+                                self.job_last_runs[job_id] = datetime.now()
+                                self.update_job_list()
+                                self._perform_backup_with_objects(self.job_selected_objects[job_id])
+                            except Exception as e:
+                                logging.error(f"Error in scheduled backup {job_id}: {str(e)}")
+                                messagebox.showerror("Backup Error", f"Scheduled backup failed: {str(e)}")
+                        
+                        self.scheduler.add_job(
+                            create_scheduled_backup,
+                            trigger=CronTrigger(hour=hour, minute=minute),
+                            id=job_id,
+                            name=f"Daily Backup at {hour:02d}:{minute:02d}"
+                        )
+                    
+                    # Restore last run times
+                    self.job_last_runs = {
+                        job_id: datetime.fromisoformat(time_str)
+                        for job_id, time_str in data['last_runs'].items()
+                    }
+                    
+                logging.info("Successfully loaded saved schedules")
+        except Exception as e:
+            logging.error(f"Error loading schedules: {str(e)}")
+    
+    def save_schedules(self):
+        """Save current schedules to JSON file"""
+        try:
+            data = {
+                'jobs': [],
+                'last_runs': {}
+            }
+            
+            # Save jobs
+            for job in self.scheduler.get_jobs():
+                job_data = {
+                    'id': job.id,
+                    'hour': job.trigger.fields[1],  # hour
+                    'minute': job.trigger.fields[0],  # minute
+                    'objects': self.job_selected_objects.get(job.id, [])
+                }
+                data['jobs'].append(job_data)
+            
+            # Save last run times
+            data['last_runs'] = {
+                job_id: time.isoformat()
+                for job_id, time in self.job_last_runs.items()
+            }
+            
+            with open('schedules.json', 'w') as f:
+                json.dump(data, f, indent=2)
+            
+            logging.info("Successfully saved schedules")
+        except Exception as e:
+            logging.error(f"Error saving schedules: {str(e)}")
+    
+    def on_closing(self):
+        """Handle window closing"""
+        try:
+            # Save schedules
+            self.save_schedules()
+            
+            # Shutdown scheduler
+            self.scheduler.shutdown()
+            
+            # Destroy window
+            self.root.destroy()
+        except Exception as e:
+            logging.error(f"Error during application shutdown: {str(e)}")
+            self.root.destroy()
+    
     def create_widgets(self):
+        # Create notebook for tabs
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        # Backup tab
+        backup_tab = ttk.Frame(self.notebook)
+        self.notebook.add(backup_tab, text="Backup")
+        
+        # Schedule tab
+        schedule_tab = ttk.Frame(self.notebook)
+        self.notebook.add(schedule_tab, text="Schedule")
+        
+        # Create backup tab widgets
+        self.create_backup_widgets(backup_tab)
+        
+        # Create schedule tab widgets
+        self.create_schedule_widgets(schedule_tab)
+    
+    def create_backup_widgets(self, parent):
         # Main frame
-        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame = ttk.Frame(parent, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # Connection frame
@@ -86,6 +213,235 @@ class KnackpyBackupUI:
         # Configure grid weights
         backup_frame.columnconfigure(1, weight=1)
         backup_frame.rowconfigure(1, weight=1)
+    
+    def create_schedule_widgets(self, parent):
+        # Main frame
+        main_frame = ttk.Frame(parent, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Schedule list frame
+        list_frame = ttk.LabelFrame(main_frame, text="Scheduled Jobs", padding="10")
+        list_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        
+        # Create Treeview for jobs
+        columns = ('Time', 'Objects', 'Status', 'Last Run', 'Next Run')
+        self.jobs_tree = ttk.Treeview(list_frame, columns=columns, show='headings')
+        
+        # Set column headings and widths
+        self.jobs_tree.heading('Time', text='Time')
+        self.jobs_tree.heading('Objects', text='Objects')
+        self.jobs_tree.heading('Status', text='Status')
+        self.jobs_tree.heading('Last Run', text='Last Run')
+        self.jobs_tree.heading('Next Run', text='Next Run')
+        
+        self.jobs_tree.column('Time', width=80)
+        self.jobs_tree.column('Objects', width=200)
+        self.jobs_tree.column('Status', width=80)
+        self.jobs_tree.column('Last Run', width=150)
+        self.jobs_tree.column('Next Run', width=150)
+        
+        # Add scrollbar
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.jobs_tree.yview)
+        self.jobs_tree.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack tree and scrollbar
+        self.jobs_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Add/Remove buttons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=10)
+        
+        ttk.Button(button_frame, text="Add Schedule", command=self.show_add_schedule_dialog).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Remove Selected", command=self.remove_selected_job).pack(side=tk.LEFT, padx=5)
+        
+        # Schedule status
+        self.schedule_status = ttk.Label(main_frame, text="Scheduler is running")
+        self.schedule_status.pack(anchor=tk.W, pady=5)
+        
+        # Update job list periodically
+        self.update_job_list()
+    
+    def show_add_schedule_dialog(self):
+        if not self.app:
+            messagebox.showerror("Error", "Please connect to a Knack application first")
+            return
+            
+        if not self.selected_containers:
+            messagebox.showerror("Error", "Please select at least one object to backup")
+            return
+            
+        # Create dialog window
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Add Schedule")
+        dialog.geometry("400x300")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Time selection
+        time_frame = ttk.Frame(dialog, padding="10")
+        time_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(time_frame, text="Hour (0-23):").pack(side=tk.LEFT)
+        hour_var = tk.StringVar(value="10")
+        ttk.Entry(time_frame, textvariable=hour_var, width=5).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(time_frame, text="Minute (0-59):").pack(side=tk.LEFT)
+        minute_var = tk.StringVar(value="19")
+        ttk.Entry(time_frame, textvariable=minute_var, width=5).pack(side=tk.LEFT, padx=5)
+        
+        # Show selected objects
+        objects_frame = ttk.LabelFrame(dialog, text="Selected Objects", padding="10")
+        objects_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        # Create a text widget to show selected objects
+        objects_text = tk.Text(objects_frame, height=5, wrap=tk.WORD)
+        objects_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Add selected objects to the text widget
+        selected_names = [self._get_container_name(container_id) for container_id in self.selected_containers]
+        objects_text.insert('1.0', '\n'.join(selected_names))
+        objects_text.config(state='disabled')
+        
+        # Add button
+        def add_schedule():
+            try:
+                hour = int(hour_var.get())
+                minute = int(minute_var.get())
+                
+                if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                    raise ValueError("Invalid time values")
+                
+                # Create job ID
+                job_id = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                
+                # Store the selected objects for this job
+                self.job_selected_objects[job_id] = self.selected_containers.copy()
+                
+                # Create a backup function that captures the current state
+                def scheduled_backup():
+                    try:
+                        # Store the last run time
+                        self.job_last_runs[job_id] = datetime.now()
+                        self.update_job_list()
+                        
+                        # Perform the backup with the stored objects
+                        self._perform_backup_with_objects(self.job_selected_objects[job_id])
+                    except Exception as e:
+                        logging.error(f"Error in scheduled backup {job_id}: {str(e)}")
+                        messagebox.showerror("Backup Error", f"Scheduled backup failed: {str(e)}")
+                
+                self.scheduler.add_job(
+                    scheduled_backup,
+                    trigger=CronTrigger(hour=hour, minute=minute),
+                    id=job_id,
+                    name=f"Daily Backup at {hour:02d}:{minute:02d}"
+                )
+                
+                self.update_job_list()
+                dialog.destroy()
+                
+            except ValueError as e:
+                messagebox.showerror("Error", str(e), parent=dialog)
+        
+        ttk.Button(dialog, text="Add Schedule", command=add_schedule).pack(pady=10)
+    
+    def _perform_backup_with_objects(self, objects_to_backup):
+        """Perform backup with a specific set of objects"""
+        if not self.app:
+            return
+        
+        # Create backup directory if it doesn't exist
+        backup_dir = self.backup_dir.get()
+        if not os.path.exists(backup_dir):
+            os.makedirs(backup_dir)
+        
+        # Create timestamp directory
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_folder = os.path.join(backup_dir, f"backup_{timestamp}")
+        os.makedirs(backup_folder)
+        
+        # Set up progress tracking
+        total_containers = len(objects_to_backup)
+        self.progress_bar["maximum"] = total_containers
+        self.progress_bar["value"] = 0
+        
+        # Perform backup for each selected container
+        for i, container_id in enumerate(objects_to_backup):
+            try:
+                # Update progress
+                container_name = self._get_container_name(container_id)
+                self.progress_label.config(text=f"Backing up {container_name} ({i+1}/{total_containers})")
+                self.progress_bar["value"] = i
+                self.root.update()
+                
+                # Get records
+                records = self.app.get(container_id)
+                
+                if records:
+                    # Format records
+                    formatted_records = [record.format() for record in records]
+                    
+                    # Save to CSV
+                    self._save_to_csv(formatted_records, container_id, container_name, backup_folder)
+                    
+                    # Also save raw JSON for complete backup
+                    self._save_to_json(formatted_records, container_id, container_name, backup_folder)
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to backup {container_id}: {str(e)}")
+        
+        # Complete progress
+        self.progress_bar["value"] = total_containers
+        self.progress_label.config(text="Backup completed!")
+        
+        # Show success message
+        messagebox.showinfo("Success", f"Backup completed successfully!\nBackup saved to: {backup_folder}")
+    
+    def update_job_list(self):
+        # Clear existing items
+        for item in self.jobs_tree.get_children():
+            self.jobs_tree.delete(item)
+        
+        # Add current jobs
+        for job in self.scheduler.get_jobs():
+            next_run = job.next_run_time.strftime('%Y-%m-%d %H:%M') if job.next_run_time else 'N/A'
+            last_run = self.job_last_runs.get(job.id, 'N/A')
+            if isinstance(last_run, datetime):
+                last_run = last_run.strftime('%Y-%m-%d %H:%M')
+            
+            # Get stored objects for this job
+            job_objects = self.job_selected_objects.get(job.id, [])
+            selected_names = [self._get_container_name(container_id) for container_id in job_objects]
+            objects_str = ', '.join(selected_names)
+            if len(objects_str) > 50:  # Truncate if too long
+                objects_str = objects_str[:47] + '...'
+            
+            self.jobs_tree.insert('', 'end', values=(
+                f"{job.trigger.fields[1]}:{job.trigger.fields[0]}",  # hour:minute
+                objects_str,
+                'Active',
+                last_run,
+                next_run
+            ))
+        
+        # Schedule next update
+        self.root.after(1000, self.update_job_list)
+    
+    def remove_selected_job(self):
+        selected = self.jobs_tree.selection()
+        if not selected:
+            messagebox.showwarning("Warning", "Please select a job to remove")
+            return
+        
+        for item in selected:
+            job_id = self.jobs_tree.item(item)['values'][0]
+            self.scheduler.remove_job(job_id)
+            # Clean up stored data
+            self.job_last_runs.pop(job_id, None)
+            self.job_selected_objects.pop(job_id, None)
+        
+        self.update_job_list()
     
     def connect_to_app(self):
         try:
